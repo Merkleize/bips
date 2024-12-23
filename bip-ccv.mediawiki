@@ -195,12 +195,12 @@ TODO
 
 == Examples ==
 
-This section documents some common Script fragments that use <code>OP_CHECKCONTRACTVERIFY</code> for various common choices of the parameters.
+This section documents some common Script fragments that use <code>OP_CHECKCONTRACTVERIFY</code> for various common choices of the parameters. Depending on the use case, some of the parameters might be passed via the witness stack.
+In these examples, <code><></code> (empty buffer) and <code>0</code> both refer to an empty stack element.
 
-=== Check that some data is embedded in the current input ===
+----
 
-This is used to check data that was typically committed to in an output from a covenant-encumbered spend that produced the current input.
-
+Check data embedded in the current input:
 <source>
 <data=data>
 <index=-1>
@@ -210,23 +210,21 @@ This is used to check data that was typically committed to in an output from a c
 OP_CHECKCONTRACTVERIFY
 </source>
 
-=== Check that some other input with index <code>in_i</code> is a specific contract with embedded data ===
+----
 
-This allows to "read" the data of another input.
-
+Check that the input with index <code>in_i</code> is a specific contract with embedded <code>input_data</code>:
 <source>
 <data=input_data>
 <index=in_i>
 <pk=input_i_naked_pk>
-<taptree=input_taptree>
+<taptree=input_i_taptree>
 <flags=-1 (CCV_FLAG_CHECK_INPUT)>
 OP_CHECKCONTRACTVERIFY
 </source>
 
-=== Check that a certain output with index <code>out_i</code> is a certain contract with specified data, preserving input amount ===
+----
 
-This might be used for a 1-to-1 or many-to-1 covenant-encumbered spend: one or several inputs are spent to an output with certain code and data.
-
+Check that the output with index <code>out_i</code> is a certain contract (pubkey and taptree) with the specified embedded <code><data></code>, preserving input amount:
 <source>
 <data=data>
 <index=out_i>
@@ -236,35 +234,35 @@ This might be used for a 1-to-1 or many-to-1 covenant-encumbered spend: one or s
 OP_CHECKCONTRACTVERIFY
 </source>
 
-=== Check that a certain output with index <code>out_i</code> is a a P2TR with a pubkey <code>output_pk</code>, preserving amount ===
+----
 
-A simpler case where we just want the output to be a certain P2TR output, without any embedded data.
-
+Check that the output with index <code>out_i</code> is a P2TR with pubkey <code>output_pk</code>, preserving amount:
 <source>
-<data=<>>
+<data=<>>  # no data
 <index=out_i>
 <pk=output_pk>
-<taptree=<>>
+<taptree=<>>  # no taptweak
 <flags=0>
 OP_CHECKCONTRACTVERIFY
 </source>
 
-=== Check that a certain output with index <code>out_i</code> is a certain contract with specified data; don't check amount ===
+----
 
-This could be used to check _data_ and _program_ of an output, but not its amount (which might be either irrelevant, or is checked via a different introspection opcode.
-
+Check that the output with index <code>out_i</code> is a certain contract (pubkey and taptree) with the specified embedded <code>data</code>; don't check amount:
 <source>
 <data=data>
 <index=out_i>
-<pk=output_naked_pk>
-<taptree=output_taptree>
+<pk=output_i_naked_pk>
+<taptree=output_i_taptree>
 <flags=CCV_FLAG_IGNORE_OUTPUT_AMOUNT>
 OP_CHECKCONTRACTVERIFY
 </source>
 
-=== Check that the input is sent exactly to the same scriptPubKey ===
-This requires that the output with the same index as the current input is exactly the same script, and with the same amount.
+'''Remark:''' it is expected that the amount is checked with separate introspection opcodes.
 
+----
+
+Check that the input's amount is sent exactly to the same scriptPubKey:
 <source>
 <data=<>>
 <index=-1>
@@ -274,6 +272,26 @@ This requires that the output with the same index as the current input is exactl
 OP_CHECKCONTRACTVERIFY
 </source>
 
+----
+
+Check that the amount of the current input is partially sent to the first output (that must have a certain pubkey), and all the remaining amount is sent to the second output, which has the same internal key and taptree as the current input:
+<source>
+<data=<>>     # no data
+<index=0>
+<pk=<output_0_pk>>
+<taptree=<>>  # no tweak
+<flags=CCV_FLAG_DEDUCT_OUTPUT_AMOUNT>
+OP_CHECKCONTRACTVERIFY
+
+<data=<>>     # no data
+<index=1>
+<pk=-1>
+<taptree=-1>
+<flags=0>
+OP_CHECKCONTRACTVERIFY
+</source>
+
+'''Remark:''' in some applications, it might be desirable to check the exact amount of the first output with separate introspection opcodes.
 
 == Applications ==
 
