@@ -16,7 +16,7 @@
 
 This BIP proposes a new tapscript opcode that add consensus support for a covenant: <code>OP_CHECKCONTRACTVERIFY</code> (<code>OP_CCV</code>).
 
-This opcode enables users to create UTXOs that carry (and can introspect) a commitment to a 32-byte hash.
+This opcode enables users to create UTXOs that carry a commitment to a 32-byte hash. The commitment can be validated during the execution of the Script, and the program (internal public key and taptree) and data of the output can be defined.
 
 In conjunction with an opcode for **vector commitments**, this allows to create and compose arbitrary state machines that define the possible future outcomes of a UTXO. The validity of a state transition depend on the conditions that can be expressed in the program (Scripts in the taptree).
 
@@ -26,7 +26,7 @@ This document is licensed under the 3-clause BSD license.
 
 === Motivation ===
 
-The ability to to constrain the future of coins beyond what is possible with presigned transactions is at the core of numerous attempts to improve bitcoin. Some of the proposed applications include:
+The ability to constrain the future of coins beyond what is possible with presigned transactions is at the core of numerous attempts to improve bitcoin. Some of the proposed applications include:
 
 * UTXO sharing schemes like TODO: (Ark, CoinPools, Timeout Trees, etc.) use various types of output restrictions in order to enable multiple parties to share the control of a UTXO, while ensuring that each participant controls their own balance.
 * Sidechains (for example: rollups) could be implemented via a UTXO encumbered with a recursive covenant, updating the sidechain state root every time it is spent.
@@ -40,24 +40,26 @@ Rather than providing a construct optimized for a specific application, this BIP
 
 We consider the **program** of a P2TR UTXO to be composed of an x-only public key (that we call the **naked key**), and a Merkle tree of Scripts. If there is no data committed in the UTXO, than the naked key is the internal key as defined in BIP-341.
 
-If the UTXO carries a commitment to a 32-byte hash (the **data**), then the naked key is tweaked with the data, and the resulting key is the internal key per BIP-341.
+If the UTXO carries a commitment to a 32-byte hash (the **data**), the naked key is tweaked with the data. The resulting key is the taproot internal key per BIP-341.
 
 This allows to embed a commitment to the data that can be validated during the Script execution, with an ad-hoc opcode called <code>OP_CHECKCONTRACTVERIFY</code>, while staying fully compatible with taproot. Notably:
-- the committed data does not make the UTXO any larger
-- the keypath spend, if desired, is still available
-- if multiple Scripts are in the taptree, only the ones that actually access the data have to pay the cost for it, via the witness stack.
+- the committed data does not make the UTXO any larger;
+- the keypath spend, if desired, is still available to the party (or parties) that control the naked key, as long as they have knowledge of the embedded data;
+- if multiple Scripts are in the taptree, only the ones that actually need to access the data have to pay a cost for it, in terms of additional witness bytes.
 
 <code>OP_CHECKCONTRACTVERIFY</code> can be applied to introspect the program and data of one of the inputs of the transaction (typically, the current input, in order to access its committed data), or one of the outputs of the transaction (in order to define its program, and possibly its committed data).
 
 === Output amounts ===
 
-Since the majority of use cases for output restrictions also require checking not just the program, but also the amount of the output, <code>OP_CHECKCONTRACTVERIFY</code> also includes by default an ergonomic semantic for checking the output amounts that allows each input to specify that its amount must flow towards certain outputs. In case multiple inputs desire their amount to go to the same outputs, the semantics guarantees that total amounts are preserved.
+Since the majority of use cases for output restrictions also require checking not just the program, but also how the amount of the input needs to be distributed amonge the outputs, <code>OP_CHECKCONTRACTVERIFY</code> also includes by default a convenient semantic: the amount of each input that specifies the program (and optionally the embedded data) for an output, must flow to that output. In case multiple inputs specifi the same output, the semantics guarantees that total amounts are preserved.
 
 This allows to support the aggregation of the amounts of multiple inputs, without requiring direct introspection or looping over the input/output amounts from within Script.
 
-Another feature allows to deduct the amount of an output from the current input, allowing programs that split a portion of the amount to a specific output. See below for the exact specs.
+Another feature, specified by the <code>flags</code> argument, allows to deduct the amount of an output from the current input, allowing programs that split a portion of the amount to a specific output. See below for the exact specs.
 
 These features require a mechanism for *deferred checks*, that are transaction-wide checks that are only evaluated if all the input Scripts have been executed successfully.
+
+The amount semantic can also be disabled, if desired.
 
 == Specification ==
 
@@ -84,7 +86,7 @@ where:
 
 In short, the semantics of the opcode with respect to the Script can be summarized as follows:
 
-   Verify that the input/output with the given index is a P2TR output where the public key is obtained from <code><pk></code>, tweaked with <data> (if present), then taptweaked with <code><taptree</code> (if present).
+   Verify that the input/output with the given <code>index</code> is a P2TR output where the public key is obtained from <code><pk></code>, tweaked with <data> (if present), then taptweaked with <code><taptree</code> (if present).
 
 In the following, the **current input** is the input whose Script is being executed.
 
@@ -110,21 +112,47 @@ The evaluation is executed any time the opcode is encountered in a Script while 
 
 The deferred checks are executed after all the inputs have been evaluated as valid.
 
-==== Deferred check initialization ====
+The following helper function is a version of <code>taproot_tweak_pubkey</code>, except that a raw 32-byte data is used as the tweak.
 
 <source lang="python">
-  for out_index in range(n_outputs)
+def tweak_add_pubkey(pubkey, data):
+    if len(data) != 32:
+        raise ValueError
+
+    t = int_from_bytes(data)
+    if t >= SECP256K1_ORDER:
+        raise ValueError
+    P = lift_x(int_from_bytes(pubkey))
+    if P is None:
+        raise ValueError
+    Q = point_add(P, point_mul(G, t))
+    return 0 if has_even_y(Q) else 1, bytes_from_int(x(Q))
+</source>
+
+The <code>taproot_tweak_pubkey</code> from [[bip-0341.mediawiki|BIP341]] is also used as a helper function.
+
+==== Deferred check initialization ====
+
+This is executed once, before any of the transaction intput's Scripts are evaluated.
+
+<source lang="python">
+  for out_index in range(n_outputs):
     out_min_amount[out_index] = 0
+
+  for in_index in range(n_inputs):
+    current_input_amount[in_index] = inputs[in_index].amount
 </source>
 
 ==== <code>OP_CHECKCONTRACTVERIFY</code> evaluation ====
+
+The following code is executed every time the <code>OP_CHECKCONTRACTVERIFY</code> opcode is encountered during the evalutation of a taproot Script spend. <code>this_input_index</code>, <code>this_input_internal_key</code> and <code>this_input_taptree</code> are the index, taproot internal key and taproot Merkle root of the current input.
 
 <source lang="python">
   if flags < CCV_FLAG_CHECK_INPUT or flags > CCV_FLAG_DEDUCT_OUTPUT_AMOUNT:
     return success()  # undefined flags are OP_SUCCESS
 
   if index == -1:
-    index = current_input_index
+    index = this_input_index
 
   if flags == CCV_FLAG_CHECK_INPUT:
     if index < 0 or index >= n_inputs:
@@ -138,12 +166,12 @@ The deferred checks are executed after all the inputs have been evaluated as val
     target = outputs[index].scriptPubKey
 
   if taptree == <-1>:
-    taptree = current_input_taptree
+    taptree = this_input_taptree
 
   if pk == <0>:
     result = BIP340_NUMS_KEY
   elif pk == <-1>:
-    result = current_input_internal_key 
+    result = this_input_internal_key 
   elif len(pk) == 32:
     result = pk
   else:
@@ -153,28 +181,30 @@ The deferred checks are executed after all the inputs have been evaluated as val
     if len(data) != 32:
       return fail()
 
-    result = tweak(result, data)
+    _, result = tweak_add_pubkey(result, data)
 
   if len(taptree) != 0:
     if len(taptree) != 32:
       return fail()
 
-    result = taptweak(result, taptree)
+    _, result = taproot_tweak_pubkey(result, taptree)
 
   if target != P2TR(result)
     return fail()
 
   if flags == 0:
-    out_min_amount[index] += inputs[current_input_index].amount
+    out_min_amount[index] += current_input_amount[this_input_index]
   elif flags == CCV_FLAG_DEDUCT_OUTPUT_AMOUNT:
-    if inputs[current_input_index].amount > outputs[index].amount:
+    if inputs[this_input_index].amount > outputs[index].amount:
       return fail()
-    inputs[current_input_index].amount -= outputs[index].amount
+    current_input_amount[this_input_index] -= outputs[index].amount
 
   stack.pop(5)  # drop all 5 stack elements
 </source>
 
 ==== Deferred checks ====
+
+The following deferred checks are executed if and only if all the inputs have been evaluated as valid.
 
 <source lang="python">
  for out_index in range(n_outputs):
