@@ -8,15 +8,16 @@
   Type: Standards Track
   Created: TBD
   License: BSD-3-Clause
-  Post-History: TBD
+  Post-History: 2022-11-08: https://gnusha.org/pi/bitcoindev/CAMhCMoH9uZPeAE_2tWH6rf0RndqV+ypjbNzazpFwFnLUpPsZ7g@mail.gmail.com/
+                2023-07-30: https://gnusha.org/pi/bitcoindev/CAMhCMoFYF+9NL1sqKfn=ma3C_mfQv7mj2fqbqO5WXVwd6vyhLw@mail.gmail.com/
 </pre>
 
 
 == Introduction ==
 
-This BIP proposes a new tapscript opcode that adds consensus support for a covenant: <code>OP_CHECKCONTRACTVERIFY</code> (<code>OP_CCV</code>).
+This BIP proposes a new tapscript opcode that adds consensus support for an opcode that enables a new type of output restrictions: <code>OP_CHECKCONTRACTVERIFY</code> (<code>OP_CCV</code>).
 
-This opcode enables users to create UTXOs that carry a commitment to a piece of data. The commitment can be validated during the execution of the Script, allowing introspection to the committed data. Moreover, a Script can constrain the program (internal public key and taptree) and the data of one or more outputs.
+This opcode enables users to create UTXOs that carry a dynamic commitment to a piece of data. The commitment can be validated during the execution of the Script, allowing introspection to the committed data. Moreover, a Script can constrain the program (internal public key and taptree) and the data of one or more outputs.
 
 In conjunction with an opcode for ''vector commitments'', this allows to create and compose arbitrary state machines that define the possible future outcomes of a UTXO. The validity of a state transition depends on the conditions that can be expressed in the program (Scripts in the taptree).
 
@@ -29,8 +30,9 @@ This document is licensed under the 3-clause BSD license.
 The ability to constrain the future of coins beyond what is possible with presigned transactions is at the core of numerous attempts to improve bitcoin. Some of the proposed applications include:
 
 * UTXO sharing schemes like Ark, CoinPools, Timeout Trees, etc. use various types of output restrictions in order to enable multiple parties to share the control of a UTXO, while ensuring that each participant controls their own balance.
-* Sidechains (for example: rollups) could be implemented via a UTXO encumbered with a recursive covenant, updating the sidechain state root every time it is spent.
-* <code>OP_VAULT</code> [[bip-0345.md|BIP-345]] utilizes similar principles of carrying data to the next output, and a 2-step withdrawal protocol that can easily be described as a state machine.
+* <code>OP_VAULT</code><ref>[[bip-0345.mediawiki|BIP-345]]</ref> is a proposed opcode to implement a 2-step withdrawal process, enabling on-chain reactive security.
+* <code>OP_CHECKTEMPLATEVERIFY</code><ref>[[bip-119.mediawiki|BIP-114]]</ref> is a long-proposed opcode to constrain the transaction to a ''template'' with a fixed set of outputs.
+* Sidechains and rollups could be implemented via a UTXO encumbered with a recursive covenant, updating the sidechain state root every time it is spent.
 
 Constructions like BitVM<ref>https://bitvm.org/</ref> try to side-step the lack of a primitive allowing UTXOs to carry state with a clever use of Lamport Signatures, and optimistic execution of smart contracts. This comes with an extremely high cost in term of complexity, interactivity, and (potentially) in block size occupation, for some of the possible execution paths. Moreover, the design of fully trustless bridges remains elusive.
 
@@ -58,7 +60,7 @@ There are two main behaviors that the opcode can enforce when checking an output
 * ''deduct'': the amount of the checked output is subtracted from the amount of the current input (the residual amount is then available for further checks);
 * ''ignore'': the output amount is ignored.
 
-Validation fails if an output is checked with both default deduct behaviors in the same transaction (even if during the evaluation of different inputs) to prevent inconsistent amount accounting, as these modes have mutually exclusive expectations for the output's amount."
+Validation fails if an output is checked with both default deduct behaviors in the same transaction (even if during the evaluation of different inputs) to prevent inconsistent amount accounting, as these modes have mutually exclusive expectations for the output's amount.
 
 The ''default'' logic covers the common case where an input wishes to send the full amount to a specific output.
 
@@ -89,7 +91,7 @@ where:
 
 * <code><flags></code> is a minimally encoded integer, according to one of the values defined below.
 * <code><taptree></code> is the Merkle root of the taproot tree, or a minimally encoded <code>-1</code>, or the empty buffer.
-* <code><pk></code> is called the **naked key**, and it's a valid 32-byte x-only public key, or a minimally encoded <code>-1</code>, or the empty buffer.
+* <code><pk></code> is called the ''naked key'', and it's a valid 32-byte x-only public key, or a minimally encoded <code>-1</code>, or the empty buffer.
 * <code><index></code> is a minimally encoded -1, or a minimally encoded non-negative integer.
 * <code><data></code> is a buffer of arbitrary length.
 
@@ -103,7 +105,7 @@ If the <code>data</code> is non-empty, then the additive tweak for the data is c
   data_tweak = sha256(pk || data)
 </source>
 
-In the following, the **current input** is the input whose Script is being executed.
+In the following, the ''current input'' is the input whose Script is being executed.
 
 The following value of the <code><flags></code> are defined:
 * <code>CCV_FLAG_CHECK_INPUT = -1</code>: Check an input's script; no amount check.
@@ -177,6 +179,8 @@ This is executed at the beginning of the evaluation of each input's Script. It i
 
 The following code is executed every time the <code>OP_CHECKCONTRACTVERIFY</code> opcode is encountered during the evalutation of a taproot Script spend. <code>this_input_index</code>, <code>this_input_internal_key</code> and <code>this_input_taptree</code> are the index, taproot internal key and taproot Merkle root of the current input.
 
+<code>BIP341_NUMS_KEY</code> is the x-only provably unspendable key <code>50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0</code> defined in [[bip-341.mediawiki|BIP-341]].
+
 <source lang="python">
   if flags < CCV_FLAG_CHECK_INPUT or flags > CCV_FLAG_DEDUCT_OUTPUT_AMOUNT:
     return success()  # undefined flags are OP_SUCCESS
@@ -186,12 +190,12 @@ The following code is executed every time the <code>OP_CHECKCONTRACTVERIFY</code
 
   if flags == CCV_FLAG_CHECK_INPUT:
     if index < 0 or index >= n_inputs:
-      return fail()
+      return fail()  # input index out of bounds
 
     target_script = inputs[index].scriptPubKey
   else:
     if index < 0 or index >= n_outputs:
-      return fail()
+      return fail()  # output index out of bounds
 
     target_script = outputs[index].scriptPubKey
 
@@ -199,14 +203,15 @@ The following code is executed every time the <code>OP_CHECKCONTRACTVERIFY</code
     taptree = this_input_taptree
 
   if pk == <0>:
-    naked_key = BIP340_NUMS_KEY
+    naked_key = BIP341_NUMS_KEY
   elif pk == <-1>:
-    naked_key = this_input_internal_key 
+    naked_key = this_input_internal_key
   elif len(pk) == 32:
     naked_key = pk
   else:
     return fail()
 
+  # Verify the target contract data and program
   _, internal_key = tweak_embed_data(naked_key, data)
 
   if len(taptree) != 0:
