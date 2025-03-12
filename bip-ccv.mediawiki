@@ -60,17 +60,39 @@ There are two main behaviors that the opcode can enforce when checking an output
 * ''deduct'': the amount of the checked output is subtracted from the amount of the current input (the residual amount is then available for further checks);
 * ''ignore'': the output amount is ignored.
 
-Validation fails if an output is checked with both default deduct behaviors in the same transaction (even if during the evaluation of different inputs) to prevent inconsistent amount accounting, as these modes have mutually exclusive expectations for the output's amount.
-
 The ''default'' logic covers the common case where an input wishes to send the full amount to a specific output.
 
 The ''deduct'' logic allows to assign portions of the input amount to one or more outputs; the residual amount, checked with a final check using the ''default'' logic, can be used to enforce that the total amount is preserved.
 
-TODO: add diagram
+The following figures illustrate some common examples of supported use cases for the amount logic. This list is not exhaustive, as there are many more possible combinations.
 
-'''Remark:''' validation fails if the amount of an output is checked with both the ''default'' and the ''deduct'' logic in the same transaction, or multiple times with the ''deduct'' logic. This prevents duplicate counting of the same output amount.
+'''Remark:''' validation fails if the amount of an output is checked with both the ''default'' and the ''deduct'' logic in the same transaction, or multiple times with the ''deduct'' logic. This prevents duplicate or inconsistent counting of the same amounts.
 
 '''Remark:''' it is allowed to check for multiple inputs to check the same output with the ''default'' logic. This allows multiple inputs to aggregate (in full or in part) their amounts to the same output.
+
+-----
+
+::[[File:bip-ccv/amount_example_1.png|framed|center|alt=1-to-1 amount logic|600px]]
+::'''Figure 1:''' A UTXO <code>A</code> sends the entire amount to some output contract <code>B</code>, using <code>CCV</code> with the <i>default</i> semantic.
+
+-----
+
+::[[File:bip-ccv/amount_example_2.png|framed|center|alt=3-to-1 aggregate amount logic|600px]]
+::'''Figure 2:''' Three UTXOs aggregate their amounts towards the same output contract, using <code>CCV</code> with the <i>default</i> semantic.
+
+-----
+
+::[[File:bip-ccv/amount_example_3.png|framed|center|alt=split amount logic|600px]]
+::'''Figure 3:''' A UTXO <code>A</code> sends a portion of its amount to a contract <code>A'</code> identical to itself, and the rest to a different contract <code>B</code>. It would use <code>CCV</code> to introspect its own input's program, then to check the first output with the <i>deduct</i> semantic, then to check the second output with the <i>default</i> semantic to assign the residual amount.
+
+-----
+
+::[[File:bip-ccv/amount_example_4.png|framed|center|alt=split and aggregate amount logic|600px]]
+::'''Figure 4:''' Similar to the previous example, but a second input <code>B</code> also checks the same output <code>X</code> with the <i>default</i> semantic, aggregating its input with the residual amount of the first input.
+
+-----
+
+Note that the ''deduct'' semantic does not allow to check the exact amount of its output. Therefore, in contracts using a scheme similar to figure 3 or 4 above, amounts be constrained with a signature, or with future introspection opcodes that allow fixing the amount.
 
 == Specification ==
 
